@@ -17,6 +17,7 @@
 """
 from __future__ import print_function
 
+import uuid
 from numba import jit
 import os.path
 import numpy as np
@@ -59,7 +60,7 @@ def convert_bbox_to_z(bbox):
   r = w/float(h)
   return np.array([x,y,s,r]).reshape((4,1))
 
-def convert_x_to_bbox(x,score=None):
+def convert_x_to_bbox(x, label=None, score=None):
   """
   Takes a bounding box in the centre form [x,y,s,r] and returns it in the form
     [x1,y1,x2,y2] where x1,y1 is the top left and x2,y2 is the bottom right
@@ -67,9 +68,15 @@ def convert_x_to_bbox(x,score=None):
   w = np.sqrt(x[2]*x[3])
   h = x[2]/w
   if(score==None):
-    return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.]).reshape((1,4))
+    if(label == None):
+      return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.]).reshape((1,4))
+    else:
+      return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2., None, label]).reshape((1,6))
   else:
-    return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.,score]).reshape((1,5))
+    if(label == None):
+      return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2., score]).reshape((1,5))
+    else: 
+      return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2., score, label]).reshape((1,6))
 
 
 class KalmanBoxTracker(object):
@@ -77,7 +84,7 @@ class KalmanBoxTracker(object):
   This class represents the internel state of individual tracked objects observed as bbox.
   """
   count = 0
-  def __init__(self,bbox):
+  def __init__(self, bbox, label):
     """
     Initialises a tracker using initial bounding box.
     """
@@ -94,14 +101,19 @@ class KalmanBoxTracker(object):
 
     self.kf.x[:4] = convert_bbox_to_z(bbox)
     self.time_since_update = 0
-    self.id = KalmanBoxTracker.count
+    self.id = str(uuid.uuid4())
     KalmanBoxTracker.count += 1
     self.history = []
     self.hits = 0
     self.hit_streak = 0
     self.age = 0
+    self.label = label
+    if len(bbox) > 5:
+      self.score = bbox[4]
+    else:
+      self.score = None
 
-  def update(self,bbox):
+  def update(self, data):
     """
     Updates the state vector with observed bbox.
     """
@@ -109,6 +121,12 @@ class KalmanBoxTracker(object):
     self.history = []
     self.hits += 1
     self.hit_streak += 1
+
+    if len(data) > 5:
+      self.score = data[4]
+      self.label = data[5]
+
+    bbox = data[:4]
     self.kf.update(convert_bbox_to_z(bbox))
 
   def predict(self):
@@ -129,7 +147,7 @@ class KalmanBoxTracker(object):
     """
     Returns the current bounding box estimate.
     """
-    return convert_x_to_bbox(self.kf.x)
+    return convert_x_to_bbox(self.kf.x, label=self.label, score=self.score)
 
 def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
   """
@@ -197,7 +215,7 @@ class Sort(object):
     to_del = []
     ret = []
     for t,trk in enumerate(trks):
-      pos = self.trackers[t].predict()[0]
+      pos = np.array(self.trackers[t].predict()[0][:4], dtype=np.float64)
       trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
       if(np.any(np.isnan(pos))):
         to_del.append(t)
@@ -214,13 +232,15 @@ class Sort(object):
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
-        trk = KalmanBoxTracker(dets[i,:])
+        trk_bbox = dets[i,:][:-1]
+        trk_label = dets[i,:][-1]
+        trk = KalmanBoxTracker(trk_bbox, trk_label)
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
         d = trk.get_state()[0]
         if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
-          ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
+          ret.append(np.concatenate((d,[trk.id])).reshape(1,-1)) # +1 as MOT benchmark requires positive
         i -= 1
         #remove dead tracklet
         if(trk.time_since_update > self.max_age):
