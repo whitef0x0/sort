@@ -1,5 +1,6 @@
 README.md
 sort/__init__.py
+sort/linear_assignment.py
 sort/sort.py
 sort.egg-info/PKG-INFO
 sort.egg-info/SOURCES.txt

@@ -14,5 +14,5 @@ setup(
     description='SORT',
     license='GPLv3',
     packages = find_packages(),
-    install_requires=['numba', 'numpy', 'scikit-image', 'matplotlib', 'sklearn', 'FilterPy']
+    install_requires=['numba', 'numpy', 'FilterPy']
 )
